@@ -4,6 +4,17 @@
  * Featuring Animated Transit Car Simulation, Ambient Eco Particle Canvas,
  * EcoSprout Mascot, and Enterprise Confirmation Modals.
  * 100% Zero CS / Academic Jargon.
+ * 
+ * AUDITED & HARDENED:
+ * - Dijkstra route calculation guards for disconnected nodes, same-node, and non-existent stations.
+ * - Circular queue pointer boundary safety for empty and full states.
+ * - Driver seat capacity clamping (never negative, never exceeding originalSeats).
+ * - LIFO rollback decoupling and status synchronization.
+ * - 3D spatial matrix bounds protection preventing NaN in projection and atan2.
+ * - Animation frame cancellation & resize cleanup.
+ * - Robust DOM element null-guarding throughout.
+ * - Modal backdrop clicking and ESC key dismiss listeners.
+ * - Input sanitization & duplicate detection.
  */
 
 // ==========================================
@@ -74,11 +85,21 @@ class NexusTransitEngine {
   }
 
   findOptimalEcoRoute(startId, endId) {
+    // FIX 1: Guard against missing station IDs
+    if (!startId || !endId) {
+      return { path: [], totalDist: 0, estTime: 0, co2Offset: 0, fare: 0, soloCarsSaved: 0 };
+    }
+
+    // FIX 2: Guard against same-origin-destination
+    if (startId === endId) {
+      return { path: [startId], totalDist: 0, estTime: 0, co2Offset: 0, fare: 0, soloCarsSaved: 0 };
+    }
+
     const adj = {};
     TRANSIT_STATIONS.forEach(s => { adj[s.id] = []; });
     TRANSIT_CORRIDORS.forEach(c => {
-      adj[c.u].push({ node: c.v, distance: c.distance });
-      adj[c.v].push({ node: c.u, distance: c.distance });
+      if (adj[c.u]) adj[c.u].push({ node: c.v, distance: c.distance });
+      if (adj[c.v]) adj[c.v].push({ node: c.u, distance: c.distance });
     });
 
     const dist = {};
@@ -98,6 +119,7 @@ class NexusTransitEngine {
       if (u === endId) break;
       if (d > dist[u]) continue;
 
+      if (!adj[u]) continue;
       for (const edge of adj[u]) {
         const v = edge.node;
         const newDist = dist[u] + edge.distance;
@@ -109,16 +131,19 @@ class NexusTransitEngine {
       }
     }
 
+    // FIX 3: Robust path extraction for disconnected nodes
     const path = [];
-    let curr = endId;
-    if (dist[endId] !== Infinity) {
+    if (dist[endId] !== Infinity && dist[endId] !== undefined) {
+      let curr = endId;
       while (curr) {
         path.unshift(curr);
         curr = prev[curr];
+        // Cycle safety guard
+        if (path.length > TRANSIT_STATIONS.length) break;
       }
     }
 
-    const totalDist = dist[endId] === Infinity ? 0 : parseFloat(dist[endId].toFixed(1));
+    const totalDist = (dist[endId] === Infinity || isNaN(dist[endId])) ? 0 : parseFloat(dist[endId].toFixed(1));
     const estTime = Math.round(totalDist * 2.2);
     const baseCO2 = totalDist * 0.171;
     const co2Offset = parseFloat((baseCO2 * (0.8 + this.commuterDensity * 0.4)).toFixed(2));
@@ -137,9 +162,10 @@ class NexusTransitEngine {
   }
 
   submitRideRequest(name, pickup, drop) {
+    const cleanName = (name || '').trim() || `Commuter_${Math.floor(Math.random() * 900 + 100)}`;
     const passenger = {
       id: `BK-${this.counters.passenger++}`,
-      name,
+      name: cleanName,
       pickup,
       drop,
       requestedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -154,7 +180,8 @@ class NexusTransitEngine {
   }
 
   pushToStandby(item) {
-    if (this.standbyCount === this.standbyCap) {
+    // FIX 4: Full capacity boundary condition
+    if (this.standbyCount >= this.standbyCap) {
       return { success: false, message: 'Priority Standby Lounge is currently at maximum capacity (5/5).' };
     }
     this.standbyLounge[this.standbyRear] = item;
@@ -164,6 +191,7 @@ class NexusTransitEngine {
   }
 
   popFromStandby() {
+    // FIX 5: Empty queue boundary condition
     if (this.standbyCount === 0) {
       return { success: false, message: 'Standby lounge is currently empty.' };
     }
@@ -176,12 +204,14 @@ class NexusTransitEngine {
 
   onboardDriver(name, station, seats) {
     const driverId = this.counters.driver++;
+    const seatCount = Math.max(1, Math.min(4, parseInt(seats, 10) || 1));
+    const cleanName = (name || '').trim() || `Partner_${Math.floor(Math.random() * 900 + 100)}`;
     const newPartner = {
       id: driverId,
-      name,
+      name: cleanName,
       station,
-      seats: parseInt(seats, 10),
-      originalSeats: parseInt(seats, 10),
+      seats: seatCount,
+      originalSeats: seatCount,
       tripsCompleted: 0
     };
     this.fleetPartners.push(newPartner);
@@ -195,17 +225,20 @@ class NexusTransitEngine {
 
   getBookingByRef(ref) {
     const upper = String(ref).trim().toUpperCase();
-    return this.activeTrips.find(t => t.tripRef.toUpperCase() === upper || t.passenger.id.toUpperCase() === upper) || null;
+    return this.activeTrips.find(t => t.tripRef.toUpperCase() === upper || (t.passenger && t.passenger.id.toUpperCase() === upper)) || null;
   }
 
   dispatchSharedTrip(passenger, driver, corridorPath, distance, time, fare, co2Saved, matchScore = 94) {
     const tripRef = `NX-${this.counters.booking++}`;
+    // Clone passenger to prevent reference mutation coupling
+    const passClone = { ...passenger, status: 'In Transit' };
+
     const trip = {
       tripRef,
-      passenger,
+      passenger: passClone,
       driverId: driver.id,
       driverName: driver.name,
-      corridorPath,
+      corridorPath: [...corridorPath],
       distance,
       time,
       fare,
@@ -215,14 +248,15 @@ class NexusTransitEngine {
     };
 
     this.activeTrips.push(trip);
-    driver.seats -= 1;
+    // Strict clamp: never below 0
+    driver.seats = Math.max(0, driver.seats - 1);
     driver.tripsCompleted += 1;
 
     this.reversalAuditLog.push({
       type: 'DISPATCH_CONFIRMATION',
       tripRef,
       driverId: driver.id,
-      passenger,
+      passenger: passClone,
       trip
     });
 
@@ -233,6 +267,11 @@ class NexusTransitEngine {
     const index = this.activeTrips.findIndex(t => t.tripRef === tripRef);
     if (index !== -1) {
       const removed = this.activeTrips.splice(index, 1)[0];
+      // Restore driver seat safely if driver still exists
+      const driver = this.getDriverById(removed.driverId);
+      if (driver) {
+        driver.seats = Math.min(driver.originalSeats, driver.seats + 1);
+      }
       return removed;
     }
     return null;
@@ -245,15 +284,24 @@ class NexusTransitEngine {
 
     const action = this.reversalAuditLog.pop();
     if (action.type === 'DISPATCH_CONFIRMATION') {
-      this.cancelActiveTrip(action.tripRef);
+      // Remove from active trips (without double incrementing seat)
+      const index = this.activeTrips.findIndex(t => t.tripRef === action.tripRef);
+      if (index !== -1) {
+        this.activeTrips.splice(index, 1);
+      }
 
       const driver = this.getDriverById(action.driverId);
       if (driver) {
-        driver.seats = Math.min(driver.seats + 1, driver.originalSeats);
+        driver.seats = Math.min(driver.originalSeats, driver.seats + 1);
+        driver.tripsCompleted = Math.max(0, driver.tripsCompleted - 1);
       }
 
-      action.passenger.status = 'Restored to Dispatch';
-      this.dispatchStream.unshift(action.passenger);
+      // Restored passenger gets a fresh independent object
+      const restoredPassenger = {
+        ...action.passenger,
+        status: 'Restored to Dispatch'
+      };
+      this.dispatchStream.unshift(restoredPassenger);
 
       return { success: true, action, driver };
     }
@@ -274,16 +322,22 @@ class AmbientEcoCanvas {
     this.ctx = this.canvas.getContext('2d');
     this.particles = [];
     this.numParticles = 35;
+    this.animId = null;
+    this.isPaused = false;
+
+    this.resize = this.resize.bind(this);
+    this.animate = this.animate.bind(this);
 
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    window.addEventListener('resize', this.resize);
     this.initParticles();
     this.animate();
   }
 
   resize() {
-    this.width = window.innerWidth;
-    this.height = window.innerHeight;
+    if (!this.canvas) return;
+    this.width = window.innerWidth || 1200;
+    this.height = window.innerHeight || 800;
     this.canvas.width = this.width;
     this.canvas.height = this.height;
   }
@@ -292,8 +346,8 @@ class AmbientEcoCanvas {
     this.particles = [];
     for (let i = 0; i < this.numParticles; i++) {
       this.particles.push({
-        x: Math.random() * this.width,
-        y: Math.random() * this.height,
+        x: Math.random() * (this.width || 1200),
+        y: Math.random() * (this.height || 800),
         size: Math.random() * 8 + 4,
         speedY: -(Math.random() * 0.45 + 0.15),
         speedX: Math.sin(Math.random() * Math.PI) * 0.25,
@@ -305,7 +359,23 @@ class AmbientEcoCanvas {
     }
   }
 
+  pause() {
+    this.isPaused = true;
+    if (this.animId) {
+      cancelAnimationFrame(this.animId);
+      this.animId = null;
+    }
+  }
+
+  resume() {
+    if (this.isPaused) {
+      this.isPaused = false;
+      this.animate();
+    }
+  }
+
   animate() {
+    if (this.isPaused || !this.ctx) return;
     this.ctx.clearRect(0, 0, this.width, this.height);
 
     this.particles.forEach(p => {
@@ -313,7 +383,7 @@ class AmbientEcoCanvas {
       p.x += p.speedX + Math.sin(p.y * 0.01) * 0.2;
       p.rotation += p.rotSpeed;
 
-      // Wrap around
+      // Wrap around screen boundaries
       if (p.y < -20) {
         p.y = this.height + 20;
         p.x = Math.random() * this.width;
@@ -326,13 +396,11 @@ class AmbientEcoCanvas {
       this.ctx.rotate(p.rotation);
 
       if (p.type === 'leaf') {
-        // Draw delicate eco-leaf
         this.ctx.fillStyle = `rgba(5, 150, 105, ${p.opacity * 0.55})`;
         this.ctx.beginPath();
         this.ctx.ellipse(0, 0, p.size, p.size * 0.55, 0, 0, Math.PI * 2);
         this.ctx.fill();
 
-        // Leaf stem line
         this.ctx.strokeStyle = `rgba(5, 150, 105, ${p.opacity * 0.7})`;
         this.ctx.lineWidth = 0.8;
         this.ctx.beginPath();
@@ -340,7 +408,6 @@ class AmbientEcoCanvas {
         this.ctx.lineTo(p.size, 0);
         this.ctx.stroke();
       } else {
-        // Light glowing electric energy node
         this.ctx.fillStyle = `rgba(37, 99, 235, ${p.opacity * 0.45})`;
         this.ctx.beginPath();
         this.ctx.arc(0, 0, p.size * 0.4, 0, Math.PI * 2);
@@ -350,7 +417,7 @@ class AmbientEcoCanvas {
       this.ctx.restore();
     });
 
-    requestAnimationFrame(() => this.animate());
+    this.animId = requestAnimationFrame(this.animate);
   }
 }
 
@@ -361,6 +428,7 @@ class AmbientEcoCanvas {
 class Urban3DCanvas {
   constructor(canvasId) {
     this.canvas = document.getElementById(canvasId);
+    if (!this.canvas) return;
     this.ctx = this.canvas.getContext('2d');
     this.wrapper = this.canvas.parentElement;
 
@@ -376,24 +444,31 @@ class Urban3DCanvas {
     this.hoveredStation = null;
 
     // Animated Car along active path
-    this.carProgress = 0; // 0 to (path.length - 1)
+    this.carProgress = 0;
     this.carSpeed = 0.0085;
     this.isCarDriving = false;
     this.flowDashOffset = 0;
 
+    this.animId = null;
+    this.isPaused = false;
+
+    this.resize = this.resize.bind(this);
+    this.animate = this.animate.bind(this);
+
     this.initEvents();
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    window.addEventListener('resize', this.resize);
     this.animate();
   }
 
   resize() {
-    if (!this.wrapper) return;
+    if (!this.wrapper || !this.canvas) return;
     this.width = this.wrapper.clientWidth || 800;
     this.height = this.wrapper.clientHeight || 420;
-    this.canvas.width = this.width * window.devicePixelRatio;
-    this.canvas.height = this.height * window.devicePixelRatio;
-    this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = this.width * dpr;
+    this.canvas.height = this.height * dpr;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   initEvents() {
@@ -423,11 +498,13 @@ class Urban3DCanvas {
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       this.scale += e.deltaY * -0.001;
+      // Clamping scale between 0.65 and 1.85 ensures no camera inversion
       this.scale = Math.max(0.65, Math.min(1.85, this.scale));
-    });
+    }, { passive: false });
   }
 
   checkHover(e) {
+    if (!this.canvas) return;
     const rect = this.canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
@@ -464,18 +541,20 @@ class Urban3DCanvas {
     const z2 = y * sinX + z1 * cosX;
 
     const cameraDist = 440;
-    const fov = cameraDist / (cameraDist + z2);
+    // Guard against divide by zero or extreme negative z2
+    const safeDenominator = Math.max(10, cameraDist + z2);
+    const fov = cameraDist / safeDenominator;
 
-    const screenX = this.width / 2 + x1 * fov * this.scale;
-    const screenY = this.height / 2 + y2 * fov * this.scale;
+    const screenX = (this.width || 800) / 2 + x1 * fov * this.scale;
+    const screenY = (this.height || 420) / 2 + y2 * fov * this.scale;
 
     return { x: screenX, y: screenY, scale: fov, z: z2 };
   }
 
   setActivePath(path) {
-    this.activeCorridorPath = path;
+    this.activeCorridorPath = Array.isArray(path) ? path : [];
     this.carProgress = 0;
-    this.isCarDriving = path && path.length > 1;
+    this.isCarDriving = this.activeCorridorPath.length > 1;
   }
 
   startCarSimulation() {
@@ -491,7 +570,23 @@ class Urban3DCanvas {
     this.scale = 1.08;
   }
 
+  pause() {
+    this.isPaused = true;
+    if (this.animId) {
+      cancelAnimationFrame(this.animId);
+      this.animId = null;
+    }
+  }
+
+  resume() {
+    if (this.isPaused) {
+      this.isPaused = false;
+      this.animate();
+    }
+  }
+
   animate() {
+    if (this.isPaused || !this.ctx) return;
     this.flowDashOffset -= 0.6;
     this.render();
 
@@ -499,11 +594,11 @@ class Urban3DCanvas {
     if (this.isCarDriving && this.activeCorridorPath.length > 1) {
       this.carProgress += this.carSpeed;
       if (this.carProgress >= this.activeCorridorPath.length - 1) {
-        this.carProgress = 0; // Loop or stop
+        this.carProgress = 0;
       }
     }
 
-    requestAnimationFrame(() => this.animate());
+    this.animId = requestAnimationFrame(this.animate);
   }
 
   render() {
@@ -516,6 +611,8 @@ class Urban3DCanvas {
     TRANSIT_CORRIDORS.forEach(corridor => {
       const uStation = TRANSIT_STATIONS.find(s => s.id === corridor.u);
       const vStation = TRANSIT_STATIONS.find(s => s.id === corridor.v);
+      if (!uStation || !vStation) return;
+
       const p1 = this.project(uStation.x, uStation.y, uStation.z);
       const p2 = this.project(vStation.x, vStation.y, vStation.z);
 
@@ -542,12 +639,10 @@ class Urban3DCanvas {
       ctx.lineTo(p2.x, p2.y);
 
       if (isPath) {
-        // Base route vector line
         ctx.strokeStyle = '#2563EB';
         ctx.lineWidth = 4.5;
         ctx.stroke();
 
-        // Directional Flow Animation (Chevrons / dashed energy pulses)
         ctx.save();
         ctx.beginPath();
         const startP = pathDirection === 1 ? p1 : p2;
@@ -575,7 +670,11 @@ class Urban3DCanvas {
       ctx.strokeStyle = isPath ? '#1D4ED8' : '#CBD5E1';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.roundRect(midX - 16, midY - 9, 32, 18, 4);
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(midX - 16, midY - 9, 32, 18, 4);
+      } else {
+        ctx.rect(midX - 16, midY - 9, 32, 18);
+      }
       ctx.fill();
       ctx.stroke();
 
@@ -619,7 +718,7 @@ class Urban3DCanvas {
       // Station Circle
       ctx.beginPath();
       const radius = (isHovered ? 14 : 11) * proj.scale;
-      ctx.arc(proj.x, proj.y, radius, 0, Math.PI * 2);
+      ctx.arc(proj.x, proj.y, Math.max(2, radius), 0, Math.PI * 2);
 
       if (isPath) {
         ctx.fillStyle = '#059669';
@@ -650,7 +749,7 @@ class Urban3DCanvas {
       ctx.restore();
     });
 
-    // Draw Animated Electric Transit Car Driving Along Route
+    // Draw Animated Electric Transit Car
     if (this.isCarDriving && this.activeCorridorPath.length > 1) {
       this.drawAnimatedCar();
     }
@@ -668,6 +767,7 @@ class Urban3DCanvas {
 
     const s1 = TRANSIT_STATIONS.find(s => s.id === fromId);
     const s2 = TRANSIT_STATIONS.find(s => s.id === toId);
+    if (!s1 || !s2) return;
 
     // Interpolate 3D coordinates
     const curX = s1.x + (s2.x - s1.x) * segmentT;
@@ -679,28 +779,42 @@ class Urban3DCanvas {
     // Calculate heading angle
     const p1 = this.project(s1.x, s1.y, s1.z);
     const p2 = this.project(s2.x, s2.y, s2.z);
-    const heading = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    // Guard against NaN heading
+    const heading = (dx === 0 && dy === 0) ? 0 : Math.atan2(dy, dx);
 
     ctx.save();
     ctx.translate(carProj.x, carProj.y);
     ctx.rotate(heading);
 
+    const safeScale = Math.max(0.4, carProj.scale);
+
     // Glowing Headlight Beams
     ctx.beginPath();
-    ctx.moveTo(12 * carProj.scale, -4 * carProj.scale);
-    ctx.lineTo(26 * carProj.scale, -12 * carProj.scale);
-    ctx.lineTo(26 * carProj.scale, 12 * carProj.scale);
-    ctx.lineTo(12 * carProj.scale, 4 * carProj.scale);
+    ctx.moveTo(12 * safeScale, -4 * safeScale);
+    ctx.lineTo(26 * safeScale, -12 * safeScale);
+    ctx.lineTo(26 * safeScale, 12 * safeScale);
+    ctx.lineTo(12 * safeScale, 4 * safeScale);
     ctx.closePath();
-    const lightGrad = ctx.createLinearGradient(12 * carProj.scale, 0, 26 * carProj.scale, 0);
-    lightGrad.addColorStop(0, 'rgba(32, 201, 176, 0.45)');
-    lightGrad.addColorStop(1, 'rgba(32, 201, 176, 0)');
-    ctx.fillStyle = lightGrad;
-    ctx.fill();
+    try {
+      const lightGrad = ctx.createLinearGradient(12 * safeScale, 0, 26 * safeScale, 0);
+      lightGrad.addColorStop(0, 'rgba(32, 201, 176, 0.45)');
+      lightGrad.addColorStop(1, 'rgba(32, 201, 176, 0)');
+      ctx.fillStyle = lightGrad;
+      ctx.fill();
+    } catch {
+      ctx.fillStyle = 'rgba(32, 201, 176, 0.25)';
+      ctx.fill();
+    }
 
     // Electric Vehicle Chassis
     ctx.beginPath();
-    ctx.roundRect(-10 * carProj.scale, -6 * carProj.scale, 20 * carProj.scale, 12 * carProj.scale, 4 * carProj.scale);
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(-10 * safeScale, -6 * safeScale, 20 * safeScale, 12 * safeScale, 4 * safeScale);
+    } else {
+      ctx.rect(-10 * safeScale, -6 * safeScale, 20 * safeScale, 12 * safeScale);
+    }
     ctx.fillStyle = '#059669';
     ctx.fill();
     ctx.strokeStyle = '#FFFFFF';
@@ -709,14 +823,18 @@ class Urban3DCanvas {
 
     // Windshield
     ctx.beginPath();
-    ctx.roundRect(0, -4 * carProj.scale, 5 * carProj.scale, 8 * carProj.scale, 2 * carProj.scale);
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(0, -4 * safeScale, 5 * safeScale, 8 * safeScale, 2 * safeScale);
+    } else {
+      ctx.rect(0, -4 * safeScale, 5 * safeScale, 8 * safeScale);
+    }
     ctx.fillStyle = '#93C5FD';
     ctx.fill();
 
     // Headlight bulbs
     ctx.fillStyle = '#FEF08A';
-    ctx.fillRect(8 * carProj.scale, -5 * carProj.scale, 2 * carProj.scale, 2 * carProj.scale);
-    ctx.fillRect(8 * carProj.scale, 3 * carProj.scale, 2 * carProj.scale, 2 * carProj.scale);
+    ctx.fillRect(8 * safeScale, -5 * safeScale, 2 * safeScale, 2 * safeScale);
+    ctx.fillRect(8 * safeScale, 3 * safeScale, 2 * safeScale, 2 * safeScale);
 
     ctx.restore();
   }
@@ -759,25 +877,17 @@ let ambientCanvasInstance = null;
 function getEcoSproutSVG() {
   return `
     <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <!-- Mascot Head -->
       <circle cx="32" cy="38" r="18" fill="#10B981"/>
       <ellipse cx="32" cy="42" rx="14" ry="10" fill="#34D399"/>
-      
-      <!-- Leaf Cap on top -->
       <path d="M32 20C32 20 22 14 26 6C34 10 32 20 32 20Z" fill="#059669"/>
       <path d="M32 20C32 20 42 14 38 6C30 10 32 20 32 20Z" fill="#34D399"/>
       <circle cx="32" cy="20" r="3" fill="#D97706"/>
-      
-      <!-- Aviator Goggles -->
       <rect x="18" y="28" width="12" height="9" rx="3" fill="#1E293B" stroke="#F59E0B" stroke-width="2"/>
       <rect x="34" y="28" width="12" height="9" rx="3" fill="#1E293B" stroke="#F59E0B" stroke-width="2"/>
       <line x1="30" y1="32" x2="34" y2="32" stroke="#F59E0B" stroke-width="2"/>
       <circle cx="24" cy="32" r="3" fill="#38BDF8"/>
       <circle cx="40" cy="32" r="3" fill="#38BDF8"/>
-      
-      <!-- Cheerful Smile -->
       <path d="M26 43C28 47 36 47 38 43" stroke="#064E3B" stroke-width="2" stroke-linecap="round"/>
-      <!-- Rosy Cheeks -->
       <circle cx="21" cy="41" r="2.5" fill="#F87171" opacity="0.7"/>
       <circle cx="43" cy="41" r="2.5" fill="#F87171" opacity="0.7"/>
     </svg>
@@ -805,10 +915,15 @@ function initTabNavigation() {
         }
       });
 
+      // Tab-specific canvas optimization
       if (targetTabId === 'tab-route-finder' && urbanCanvasInstance) {
+        urbanCanvasInstance.resume();
         setTimeout(() => {
           urbanCanvasInstance.resize();
         }, 50);
+      } else if (urbanCanvasInstance) {
+        // Pause 3D render loop when offscreen to save GPU/CPU cycles
+        urbanCanvasInstance.pause();
       }
     });
   });
@@ -829,8 +944,11 @@ function refreshPlatformUI() {
 }
 
 function updateTopKPIs() {
-  document.getElementById('kpi-commuters').innerHTML = `${engine.dispatchStream.length} <span class="kpi-unit">commuters</span>`;
-  document.getElementById('kpi-active-trips').innerHTML = `${engine.activeTrips.length} <span class="kpi-unit">trips</span>`;
+  const commutersEl = document.getElementById('kpi-commuters');
+  if (commutersEl) commutersEl.innerHTML = `${engine.dispatchStream.length} <span class="kpi-unit">commuters</span>`;
+
+  const tripsEl = document.getElementById('kpi-active-trips');
+  if (tripsEl) tripsEl.innerHTML = `${engine.activeTrips.length} <span class="kpi-unit">trips</span>`;
 
   const passBadge = document.getElementById('tab-passengers-badge');
   if (passBadge) passBadge.textContent = engine.dispatchStream.length + engine.standbyCount;
@@ -841,16 +959,24 @@ function updateTopKPIs() {
   let totalSavedCO2 = 148.5;
   let totalDistance = 1420;
   engine.activeTrips.forEach(t => {
-    totalSavedCO2 += t.co2Saved;
-    totalDistance += t.distance;
+    totalSavedCO2 += (t.co2Saved || 0);
+    totalDistance += (t.distance || 0);
   });
 
-  document.getElementById('kpi-co2').innerHTML = `${totalSavedCO2.toFixed(1)} <span class="kpi-unit">kg</span>`;
-  document.getElementById('eco-total-co2').textContent = `${totalSavedCO2.toFixed(1)} kg`;
-  document.getElementById('eco-shared-km').textContent = `${Math.round(totalDistance).toLocaleString()} km`;
+  const kpiCo2 = document.getElementById('kpi-co2');
+  if (kpiCo2) kpiCo2.innerHTML = `${totalSavedCO2.toFixed(1)} <span class="kpi-unit">kg</span>`;
 
-  document.getElementById('fleet-count-badge').textContent = `${engine.fleetPartners.length} Active Partners`;
-  document.getElementById('active-trips-badge').textContent = `${engine.activeTrips.length} In-Transit`;
+  const ecoTotal = document.getElementById('eco-total-co2');
+  if (ecoTotal) ecoTotal.textContent = `${totalSavedCO2.toFixed(1)} kg`;
+
+  const ecoKm = document.getElementById('eco-shared-km');
+  if (ecoKm) ecoKm.textContent = `${Math.round(totalDistance).toLocaleString()} km`;
+
+  const fleetCountBadge = document.getElementById('fleet-count-badge');
+  if (fleetCountBadge) fleetCountBadge.textContent = `${engine.fleetPartners.length} Active Partners`;
+
+  const activeTripsBadge = document.getElementById('active-trips-badge');
+  if (activeTripsBadge) activeTripsBadge.textContent = `${engine.activeTrips.length} In-Transit`;
 }
 
 // --- Passenger Dispatch Stream with EcoSprout Empty State ---
@@ -872,9 +998,9 @@ function renderPassengerDispatchStream() {
   container.innerHTML = engine.dispatchStream.map((pass, idx) => `
     <div class="commuter-token ${idx === 0 ? 'head-token' : ''} eco-card-hover">
       <div class="token-badge">${idx === 0 ? 'NEXT DISPATCH' : `PRIORITY #${idx + 1}`}</div>
-      <div class="token-name">${pass.name}</div>
-      <div class="token-route"><i class="fa-solid fa-route"></i> ${pass.pickup} &rarr; ${pass.drop}</div>
-      <div class="token-meta">${pass.id} &bull; ${pass.requestedAt}</div>
+      <div class="token-name">${escapeHTML(pass.name)}</div>
+      <div class="token-route"><i class="fa-solid fa-route"></i> ${escapeHTML(pass.pickup)} &rarr; ${escapeHTML(pass.drop)}</div>
+      <div class="token-meta">${escapeHTML(pass.id)} &bull; ${escapeHTML(pass.requestedAt)}</div>
     </div>
   `).join('');
 }
@@ -909,7 +1035,7 @@ function renderStandbyLounge() {
     const passenger = engine.standbyLounge[i];
     slotEl.innerHTML = `
       <div class="font-bold">SLOT ${i + 1}</div>
-      <div class="text-[9px] truncate max-w-[42px]">${passenger ? passenger.name.split(' ')[0] : 'FREE'}</div>
+      <div class="text-[9px] truncate max-w-[42px]">${passenger ? escapeHTML(passenger.name.split(' ')[0]) : 'FREE'}</div>
     `;
     slotEl.title = passenger ? `Standby: ${passenger.name} (${passenger.pickup} -> ${passenger.drop})` : `Slot ${i + 1}: Empty`;
     ring.appendChild(slotEl);
@@ -945,8 +1071,8 @@ function renderFleetDirectory() {
           <span class="driver-id-badge">ID: #${partner.id}</span>
           <span class="seat-counter-pill">${partner.seats}/${partner.originalSeats} Seats</span>
         </div>
-        <div class="driver-name">${partner.name}</div>
-        <div class="driver-corridor"><i class="fa-solid fa-location-dot text-emerald"></i> ${partner.station} Station</div>
+        <div class="driver-name">${escapeHTML(partner.name)}</div>
+        <div class="driver-corridor"><i class="fa-solid fa-location-dot text-emerald"></i> ${escapeHTML(partner.station)} Station</div>
         <div class="text-[10px] text-slate-500 mt-1">${partner.tripsCompleted} Shared Trips</div>
       </div>
     `;
@@ -981,12 +1107,12 @@ function renderActiveTrips() {
         <i class="fa-solid fa-xmark"></i>
       </button>
       <div class="flex justify-between items-center">
-        <span class="trip-ref">${trip.tripRef}</span>
+        <span class="trip-ref">${escapeHTML(trip.tripRef)}</span>
         <span class="route-match-badge">${trip.matchScore}% Route Match</span>
       </div>
-      <div class="text-xs font-bold text-slate-900 mt-0.5">${trip.passenger.name}</div>
-      <div class="text-[10px] text-electric font-semibold">${trip.corridorPath.join(' &rarr; ')}</div>
-      <div class="text-[10px] text-slate-600 mt-1"><i class="fa-solid fa-id-badge text-emerald"></i> ${trip.driverName}</div>
+      <div class="text-xs font-bold text-slate-900 mt-0.5">${escapeHTML(trip.passenger.name)}</div>
+      <div class="text-[10px] text-electric font-semibold">${trip.corridorPath.map(escapeHTML).join(' &rarr; ')}</div>
+      <div class="text-[10px] text-slate-600 mt-1"><i class="fa-solid fa-id-badge text-emerald"></i> ${escapeHTML(trip.driverName)}</div>
       <div class="flex justify-between items-center text-[9px] text-slate-500 pt-1 border-t border-slate-200 mt-1">
         <span>+${trip.co2Saved}kg CO₂</span>
         <button class="text-emerald hover:underline font-bold" onclick="viewEcoReceipt('${trip.tripRef}')">
@@ -1005,7 +1131,7 @@ function renderTransitHierarchyCanvas() {
   const ctx = canvas.getContext('2d');
   const countPill = document.getElementById('registry-count-pill');
 
-  countPill.textContent = `${engine.activeTrips.length} Active Trips`;
+  if (countPill) countPill.textContent = `${engine.activeTrips.length} Active Trips`;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   if (engine.activeTrips.length === 0) {
@@ -1016,7 +1142,6 @@ function renderTransitHierarchyCanvas() {
     return;
   }
 
-  // Draw Root Hub
   const rootX = canvas.width / 2;
   const rootY = 24;
 
@@ -1034,7 +1159,6 @@ function renderTransitHierarchyCanvas() {
   ctx.textBaseline = 'middle';
   ctx.fillText('NEXUS', rootX, rootY);
 
-  // Draw Branches
   const count = engine.activeTrips.length;
   const spacing = Math.min(80, (canvas.width - 60) / Math.max(count, 1));
   const startX = rootX - ((count - 1) * spacing) / 2;
@@ -1055,11 +1179,8 @@ function renderTransitHierarchyCanvas() {
     ctx.fillStyle = '#FFFFFF';
     ctx.strokeStyle = '#2563EB';
     ctx.lineWidth = 2;
-    ctx.shadowColor = 'rgba(37, 99, 235, 0.2)';
-    ctx.shadowBlur = 6;
     ctx.fill();
     ctx.stroke();
-    ctx.shadowBlur = 0;
 
     ctx.fillStyle = '#1E293B';
     ctx.font = 'bold 8px "JetBrains Mono"';
@@ -1068,7 +1189,8 @@ function renderTransitHierarchyCanvas() {
 
     ctx.fillStyle = '#059669';
     ctx.font = '500 8px "Inter"';
-    ctx.fillText(trip.passenger.name.split(' ')[0], nodeX, nodeY + 22);
+    const shortName = trip.passenger && trip.passenger.name ? trip.passenger.name.split(' ')[0] : 'Trip';
+    ctx.fillText(shortName, nodeX, nodeY + 22);
   });
 }
 
@@ -1093,7 +1215,7 @@ function renderAuditHistory() {
     <div class="audit-entry ${idx === latestIdx ? 'latest-entry' : ''}">
       <div class="flex items-center gap-2">
         <i class="fa-solid fa-shield-check text-emerald"></i>
-        <span class="font-semibold text-slate-800">${entry.tripRef} &bull; ${entry.passenger.name}</span>
+        <span class="font-semibold text-slate-800">${escapeHTML(entry.tripRef)} &bull; ${escapeHTML(entry.passenger ? entry.passenger.name : 'Unknown')}</span>
       </div>
       <span class="text-slate-500 font-mono text-[10px]">Driver #${entry.driverId}</span>
     </div>
@@ -1110,8 +1232,8 @@ function renderLeaderboard() {
       <div class="flex items-center gap-2">
         <span class="text-amber-500 font-bold">#${idx + 1}</span>
         <div>
-          <div class="font-semibold text-slate-800">${item.name}</div>
-          <span class="gamified-badge"><i class="fa-solid fa-award"></i> ${item.badge}</span>
+          <div class="font-semibold text-slate-800">${escapeHTML(item.name)}</div>
+          <span class="gamified-badge"><i class="fa-solid fa-award"></i> ${escapeHTML(item.badge)}</span>
         </div>
       </div>
       <div class="flex items-center gap-3">
@@ -1129,13 +1251,14 @@ function renderLeaderboard() {
 function openDispatchModal(trip, driver) {
   const modal = document.getElementById('dispatch-confirm-modal');
   const body = document.getElementById('dispatch-modal-body');
+  if (!modal || !body) return;
 
   body.innerHTML = `
     <div class="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
       <div class="text-2xl text-emerald"><i class="fa-solid fa-circle-check"></i></div>
       <div>
-        <div class="text-sm font-bold text-slate-900">Trip Reference: ${trip.tripRef}</div>
-        <div class="text-xs text-slate-600">Passenger ${trip.passenger.name} matched with ${driver.name} (ID: #${driver.id})</div>
+        <div class="text-sm font-bold text-slate-900">Trip Reference: ${escapeHTML(trip.tripRef)}</div>
+        <div class="text-xs text-slate-600">Passenger ${escapeHTML(trip.passenger.name)} matched with ${escapeHTML(driver.name)} (ID: #${driver.id})</div>
       </div>
     </div>
 
@@ -1159,7 +1282,7 @@ function openDispatchModal(trip, driver) {
     </div>
 
     <div class="text-xs text-slate-500 font-mono">
-      Route Transit: ${trip.corridorPath.join(' &rarr; ')} &bull; Fleet seats remaining for #${driver.id}: ${driver.seats}
+      Route Transit: ${trip.corridorPath.map(escapeHTML).join(' &rarr; ')} &bull; Fleet seats remaining for #${driver.id}: ${driver.seats}
     </div>
   `;
 
@@ -1169,12 +1292,13 @@ function openDispatchModal(trip, driver) {
 function openReversalModal(action, driver) {
   const modal = document.getElementById('reversal-confirm-modal');
   const body = document.getElementById('reversal-modal-body');
+  if (!modal || !body) return;
 
   body.innerHTML = `
     <div class="flex items-center gap-3 p-3 bg-rose-50 border border-rose-200 rounded-xl">
       <div class="text-2xl text-rose"><i class="fa-solid fa-arrow-rotate-left"></i></div>
       <div>
-        <div class="text-sm font-bold text-slate-900">Reverted Trip: ${action.tripRef}</div>
+        <div class="text-sm font-bold text-slate-900">Reverted Trip: ${escapeHTML(action.tripRef)}</div>
         <div class="text-xs text-slate-600">The most recent dispatch confirmation was safely reversed.</div>
       </div>
     </div>
@@ -1182,7 +1306,7 @@ function openReversalModal(action, driver) {
     <div class="modal-stat-grid">
       <div class="modal-stat-box">
         <span class="stat-label">RESTORED DRIVER</span>
-        <span class="stat-val text-slate-900">${driver ? driver.name : `ID #${action.driverId}`}</span>
+        <span class="stat-val text-slate-900">${driver ? escapeHTML(driver.name) : `ID #${action.driverId}`}</span>
       </div>
       <div class="modal-stat-box">
         <span class="stat-label">UPDATED SEAT CAPACITY</span>
@@ -1191,7 +1315,7 @@ function openReversalModal(action, driver) {
     </div>
 
     <div class="text-xs text-slate-600">
-      Commuter <b>${action.passenger.name}</b> has been returned to the front of the dispatch queue without losing priority.
+      Commuter <b>${escapeHTML(action.passenger.name)}</b> has been returned to the front of the dispatch queue without losing priority.
     </div>
   `;
 
@@ -1201,6 +1325,7 @@ function openReversalModal(action, driver) {
 // Global Toast System
 function showPlatformToast(message, type = 'emerald') {
   const container = document.getElementById('toast-container');
+  if (!container) return;
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
   toast.innerHTML = `<i class="fa-solid fa-circle-check text-emerald"></i><span>${message}</span>`;
@@ -1211,6 +1336,18 @@ function showPlatformToast(message, type = 'emerald') {
     toast.style.transform = 'translateY(15px)';
     setTimeout(() => toast.remove(), 300);
   }, 3600);
+}
+
+// Escape HTML utility to prevent XSS injection
+function escapeHTML(str) {
+  if (typeof str !== 'string') return String(str || '');
+  return str.replace(/[&<>'"]/g, tag => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+  }[tag] || tag));
 }
 
 // Global trip completion hook
@@ -1229,23 +1366,24 @@ window.viewEcoReceipt = function(tripRef) {
 
   const modal = document.getElementById('receipt-modal-overlay');
   const content = document.getElementById('receipt-content-area');
+  if (!modal || !content) return;
 
   content.innerHTML = `
     <div class="receipt-item-row">
       <span>Booking Reference:</span>
-      <span class="font-mono font-bold text-slate-800">${trip.tripRef}</span>
+      <span class="font-mono font-bold text-slate-800">${escapeHTML(trip.tripRef)}</span>
     </div>
     <div class="receipt-item-row">
       <span>Commuter Name:</span>
-      <span class="font-semibold text-slate-800">${trip.passenger.name}</span>
+      <span class="font-semibold text-slate-800">${escapeHTML(trip.passenger.name)}</span>
     </div>
     <div class="receipt-item-row">
       <span>Driver Partner:</span>
-      <span class="text-slate-800">${trip.driverName} (ID: #${trip.driverId})</span>
+      <span class="text-slate-800">${escapeHTML(trip.driverName)} (ID: #${trip.driverId})</span>
     </div>
     <div class="receipt-item-row">
       <span>Corridor Route:</span>
-      <span class="text-electric font-semibold">${trip.corridorPath.join(' &rarr; ')}</span>
+      <span class="text-electric font-semibold">${trip.corridorPath.map(escapeHTML).join(' &rarr; ')}</span>
     </div>
     <div class="receipt-item-row">
       <span>Distance & Time:</span>
@@ -1283,20 +1421,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const passDrop = document.getElementById('passenger-drop-select');
   const driverStation = document.getElementById('driver-station-select');
 
-  TRANSIT_STATIONS.forEach(s => {
-    const opt = `<option value="${s.id}">${s.name} (${s.zone})</option>`;
-    originSel.insertAdjacentHTML('beforeend', opt);
-    destSel.insertAdjacentHTML('beforeend', opt);
-    passPickup.insertAdjacentHTML('beforeend', opt);
-    passDrop.insertAdjacentHTML('beforeend', opt);
-    driverStation.insertAdjacentHTML('beforeend', opt);
-  });
+  if (originSel && destSel && passPickup && passDrop && driverStation) {
+    TRANSIT_STATIONS.forEach(s => {
+      const opt = `<option value="${s.id}">${s.name} (${s.zone})</option>`;
+      originSel.insertAdjacentHTML('beforeend', opt);
+      destSel.insertAdjacentHTML('beforeend', opt);
+      passPickup.insertAdjacentHTML('beforeend', opt);
+      passDrop.insertAdjacentHTML('beforeend', opt);
+      driverStation.insertAdjacentHTML('beforeend', opt);
+    });
 
-  originSel.value = 'ALPHA';
-  destSel.value = 'HORIZON';
-  passPickup.value = 'ALPHA';
-  passDrop.value = 'HORIZON';
-  driverStation.value = 'METRO';
+    originSel.value = 'ALPHA';
+    destSel.value = 'HORIZON';
+    passPickup.value = 'ALPHA';
+    passDrop.value = 'HORIZON';
+    driverStation.value = 'METRO';
+  }
 
   // --- Dynamic Commuter Slider Handler ---
   const commuterSlider = document.getElementById('commuter-range-slider');
@@ -1304,6 +1444,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const sliderTicks = document.querySelectorAll('.slider-ticks .tick');
 
   function updateCommuterSliderMetrics() {
+    if (!commuterSlider) return;
     const val = parseInt(commuterSlider.value, 10);
     engine.commuterDensity = val;
 
@@ -1314,14 +1455,16 @@ document.addEventListener('DOMContentLoaded', () => {
     computeAndDisplayRoute();
   }
 
-  commuterSlider.addEventListener('input', updateCommuterSliderMetrics);
+  if (commuterSlider) {
+    commuterSlider.addEventListener('input', updateCommuterSliderMetrics);
+  }
 
   // --- Interactive 4-Seat Vehicle Selector ---
   const seatButtons = [
     document.getElementById('seat-front-pass'),
     document.getElementById('seat-rear-left'),
     document.getElementById('seat-rear-right')
-  ];
+  ].filter(Boolean);
   const driverSeatsCountLabel = document.getElementById('driver-seats-count-label');
 
   function getActiveSeatsCount() {
@@ -1341,16 +1484,17 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         btn.classList.remove('reserved-seat');
         btn.classList.add('active-seat');
-        btn.innerHTML = `<i class="fa-solid fa-user-check"></i><span>${btn.dataset.seat.toUpperCase()}</span>`;
+        btn.innerHTML = `<i class="fa-solid fa-user-check"></i><span>${(btn.dataset.seat || 'SEAT').toUpperCase()}</span>`;
       }
       const count = getActiveSeatsCount();
-      driverSeatsCountLabel.textContent = count;
+      if (driverSeatsCountLabel) driverSeatsCountLabel.textContent = count;
       showPlatformToast(`Car configuration: ${count} passenger seats available.`, 'emerald');
     });
   });
 
   // --- Calculate Route Button ---
   function computeAndDisplayRoute() {
+    if (!originSel || !destSel) return;
     const orig = originSel.value;
     const dest = destSel.value;
 
@@ -1360,291 +1504,382 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const res = engine.findOptimalEcoRoute(orig, dest);
-    urbanCanvasInstance.setActivePath(res.path);
+    if (urbanCanvasInstance) {
+      urbanCanvasInstance.setActivePath(res.path);
+    }
 
-    document.getElementById('strip-path').textContent = res.path.join(' → ');
-    document.getElementById('strip-distance').textContent = `${res.totalDist} km`;
-    document.getElementById('strip-time').textContent = `~${res.estTime} min`;
-    document.getElementById('strip-co2').textContent = `-${res.co2Offset} kg`;
-    document.getElementById('strip-vehicles-saved').textContent = `${res.soloCarsSaved} ${res.soloCarsSaved === 1 ? 'Car' : 'Cars'}`;
-    sliderFareDisplay.textContent = `$${res.fare}`;
+    const stripPath = document.getElementById('strip-path');
+    if (stripPath) stripPath.textContent = res.path.length > 0 ? res.path.join(' → ') : 'No Direct Corridor';
 
-    showPlatformToast(`Optimal eco-route: ${res.totalDist} km, saving ${res.co2Offset} kg CO₂.`, 'emerald');
+    const stripDist = document.getElementById('strip-distance');
+    if (stripDist) stripDist.textContent = `${res.totalDist} km`;
+
+    const stripTime = document.getElementById('strip-time');
+    if (stripTime) stripTime.textContent = `~${res.estTime} min`;
+
+    const stripCo2 = document.getElementById('strip-co2');
+    if (stripCo2) stripCo2.textContent = `-${res.co2Offset} kg`;
+
+    const stripVeh = document.getElementById('strip-vehicles-saved');
+    if (stripVeh) stripVeh.textContent = `${res.soloCarsSaved} ${res.soloCarsSaved === 1 ? 'Car' : 'Cars'}`;
+
+    if (sliderFareDisplay) sliderFareDisplay.textContent = `$${res.fare}`;
   }
 
-  document.getElementById('btn-calc-route').addEventListener('click', computeAndDisplayRoute);
+  const btnCalcRoute = document.getElementById('btn-calc-route');
+  if (btnCalcRoute) btnCalcRoute.addEventListener('click', computeAndDisplayRoute);
 
-  document.getElementById('btn-simulate-drive').addEventListener('click', () => {
-    urbanCanvasInstance.startCarSimulation();
-    showPlatformToast('Simulating top-down electric transit drive along route corridors!', 'blue');
-  });
+  const btnSimDrive = document.getElementById('btn-simulate-drive');
+  if (btnSimDrive) {
+    btnSimDrive.addEventListener('click', () => {
+      if (urbanCanvasInstance) {
+        urbanCanvasInstance.startCarSimulation();
+        showPlatformToast('Simulating top-down electric transit drive along route corridors!', 'blue');
+      }
+    });
+  }
 
-  document.getElementById('btn-swap-route').addEventListener('click', () => {
-    const temp = originSel.value;
-    originSel.value = destSel.value;
-    destSel.value = temp;
-    computeAndDisplayRoute();
-  });
+  const btnSwapRoute = document.getElementById('btn-swap-route');
+  if (btnSwapRoute && originSel && destSel) {
+    btnSwapRoute.addEventListener('click', () => {
+      const temp = originSel.value;
+      originSel.value = destSel.value;
+      destSel.value = temp;
+      computeAndDisplayRoute();
+    });
+  }
 
-  document.getElementById('btn-reset-view').addEventListener('click', () => {
-    urbanCanvasInstance.resetCamera();
-  });
+  const btnResetView = document.getElementById('btn-reset-view');
+  if (btnResetView && urbanCanvasInstance) {
+    btnResetView.addEventListener('click', () => {
+      urbanCanvasInstance.resetCamera();
+    });
+  }
 
   // --- Passenger Request ---
-  document.getElementById('btn-request-ride').addEventListener('click', () => {
-    const nameInput = document.getElementById('passenger-name-input');
-    const name = nameInput.value.trim() || `Commuter_${Math.floor(Math.random() * 900 + 100)}`;
-    const pickup = passPickup.value;
-    const drop = passDrop.value;
+  const btnRequestRide = document.getElementById('btn-request-ride');
+  if (btnRequestRide) {
+    btnRequestRide.addEventListener('click', () => {
+      const nameInput = document.getElementById('passenger-name-input');
+      const rawName = nameInput ? nameInput.value : '';
+      const name = rawName.trim() || `Commuter_${Math.floor(Math.random() * 900 + 100)}`;
+      const pickup = passPickup ? passPickup.value : 'ALPHA';
+      const drop = passDrop ? passDrop.value : 'HORIZON';
 
-    if (pickup === drop) {
-      showPlatformToast('Pickup and drop-off stations must be distinct.', 'rose');
-      return;
-    }
+      if (pickup === drop) {
+        showPlatformToast('Pickup and drop-off stations must be distinct.', 'rose');
+        return;
+      }
 
-    const passenger = engine.submitRideRequest(name, pickup, drop);
-    nameInput.value = '';
-    refreshPlatformUI();
-    showPlatformToast(`Ride request submitted for ${passenger.name} (${pickup} → ${drop}).`, 'emerald');
-  });
-
-  document.getElementById('btn-cancel-front-req').addEventListener('click', () => {
-    const dequeued = engine.dequeueNextRequest();
-    if (dequeued) {
+      const passenger = engine.submitRideRequest(name, pickup, drop);
+      if (nameInput) nameInput.value = '';
       refreshPlatformUI();
-      showPlatformToast(`Dispatched or cancelled request for ${dequeued.name} (${dequeued.id}).`, 'amber');
-    } else {
-      showPlatformToast('No pending passenger requests in the pipeline.', 'rose');
-    }
-  });
+      showPlatformToast(`Ride request submitted for ${passenger.name} (${pickup} → ${drop}).`, 'emerald');
+    });
+  }
+
+  const btnCancelFrontReq = document.getElementById('btn-cancel-front-req');
+  if (btnCancelFrontReq) {
+    btnCancelFrontReq.addEventListener('click', () => {
+      const dequeued = engine.dequeueNextRequest();
+      if (dequeued) {
+        refreshPlatformUI();
+        showPlatformToast(`Cancelled request for ${dequeued.name} (${dequeued.id}).`, 'amber');
+      } else {
+        showPlatformToast('No pending passenger requests in the pipeline.', 'rose');
+      }
+    });
+  }
 
   // --- Priority Standby Lounge ---
-  document.getElementById('btn-push-standby').addEventListener('click', () => {
-    let candidate = engine.dequeueNextRequest();
-    if (!candidate) {
-      candidate = {
-        id: `BK-STDBY-${Math.floor(Math.random() * 800 + 100)}`,
-        name: `Standby_Passenger_${Math.floor(Math.random() * 90 + 10)}`,
-        pickup: 'METRO',
-        drop: 'SKYPORT',
-        requestedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        status: 'In Priority Standby'
-      };
-    }
+  const btnPushStandby = document.getElementById('btn-push-standby');
+  if (btnPushStandby) {
+    btnPushStandby.addEventListener('click', () => {
+      let candidate = engine.dequeueNextRequest();
+      if (!candidate) {
+        candidate = {
+          id: `BK-STDBY-${Math.floor(Math.random() * 800 + 100)}`,
+          name: `Standby_Passenger_${Math.floor(Math.random() * 90 + 10)}`,
+          pickup: 'METRO',
+          drop: 'SKYPORT',
+          requestedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          status: 'In Priority Standby'
+        };
+      }
 
-    const res = engine.pushToStandby(candidate);
-    if (!res.success) {
-      showPlatformToast(res.message, 'rose');
-      engine.dispatchStream.unshift(candidate);
-    } else {
-      showPlatformToast(`${candidate.name} admitted to Priority Standby Lounge.`, 'amber');
-    }
-    refreshPlatformUI();
-  });
+      const res = engine.pushToStandby(candidate);
+      if (!res.success) {
+        showPlatformToast(res.message, 'rose');
+        engine.dispatchStream.unshift(candidate);
+      } else {
+        showPlatformToast(`${candidate.name} admitted to Priority Standby Lounge.`, 'amber');
+      }
+      refreshPlatformUI();
+    });
+  }
 
-  document.getElementById('btn-pop-standby').addEventListener('click', () => {
-    const res = engine.popFromStandby();
-    if (!res.success) {
-      showPlatformToast(res.message, 'rose');
-    } else {
-      showPlatformToast(`Seated ${res.item.name} from Priority Standby Lounge.`, 'amber');
-    }
-    refreshPlatformUI();
-  });
+  const btnPopStandby = document.getElementById('btn-pop-standby');
+  if (btnPopStandby) {
+    btnPopStandby.addEventListener('click', () => {
+      const res = engine.popFromStandby();
+      if (!res.success) {
+        showPlatformToast(res.message, 'rose');
+      } else {
+        showPlatformToast(`Seated ${res.item.name} from Priority Standby Lounge.`, 'amber');
+      }
+      refreshPlatformUI();
+    });
+  }
 
   // --- Driver Partner Registration with Visual Seat Selector ---
-  document.getElementById('btn-register-driver').addEventListener('click', () => {
-    const nameInput = document.getElementById('driver-name-input');
-    const name = nameInput.value.trim() || `Partner_${Math.floor(Math.random() * 900 + 100)}`;
-    const station = driverStation.value;
-    const seats = getActiveSeatsCount();
+  const btnRegisterDriver = document.getElementById('btn-register-driver');
+  if (btnRegisterDriver) {
+    btnRegisterDriver.addEventListener('click', () => {
+      const nameInput = document.getElementById('driver-name-input');
+      const rawName = nameInput ? nameInput.value : '';
+      const name = rawName.trim() || `Partner_${Math.floor(Math.random() * 900 + 100)}`;
+      const station = driverStation ? driverStation.value : 'METRO';
+      const seats = getActiveSeatsCount();
 
-    if (seats === 0) {
-      showPlatformToast('Please toggle at least 1 passenger seat in the vehicle blueprint.', 'rose');
-      return;
-    }
+      if (seats === 0) {
+        showPlatformToast('Please toggle at least 1 passenger seat in the vehicle blueprint.', 'rose');
+        return;
+      }
 
-    const partner = engine.onboardDriver(name, station, seats);
-    nameInput.value = '';
-    refreshPlatformUI();
-    showPlatformToast(`Driver Partner ${partner.name} onboarded with ${partner.seats} passenger seats (ID: #${partner.id}).`, 'emerald');
-  });
+      const partner = engine.onboardDriver(name, station, seats);
+      if (nameInput) nameInput.value = '';
+      refreshPlatformUI();
+      showPlatformToast(`Driver Partner ${partner.name} onboarded with ${partner.seats} passenger seats (ID: #${partner.id}).`, 'emerald');
+    });
+  }
 
   // --- Flexible Verification & Lookup ---
-  document.getElementById('btn-verify-id').addEventListener('click', () => {
-    const idInput = document.getElementById('verify-id-input');
-    const resultBox = document.getElementById('verification-result-box');
-    const query = idInput.value.trim();
+  const btnVerifyId = document.getElementById('btn-verify-id');
+  if (btnVerifyId) {
+    btnVerifyId.addEventListener('click', () => {
+      const idInput = document.getElementById('verify-id-input');
+      const resultBox = document.getElementById('verification-result-box');
+      if (!idInput || !resultBox) return;
+      const query = idInput.value.trim();
 
-    if (!query) {
-      resultBox.innerHTML = '<span class="text-rose-500 text-xs">Please enter a valid Driver Partner ID or Booking Reference.</span>';
-      return;
-    }
+      if (!query) {
+        resultBox.innerHTML = '<span class="text-rose-500 text-xs">Please enter a valid Driver Partner ID or Booking Reference.</span>';
+        return;
+      }
 
-    const partner = engine.getDriverById(query);
-    if (partner) {
-      resultBox.innerHTML = `
-        <div class="flex items-center justify-between w-full text-xs">
-          <div>
-            <span class="text-emerald font-bold"><i class="fa-solid fa-circle-check"></i> Verified Partner:</span>
-            <span class="text-slate-900 font-semibold ml-1">${partner.name} (ID: #${partner.id})</span>
-            <span class="text-slate-500 ml-2">&bull; ${partner.station} Station</span>
-          </div>
-          <span class="seat-counter-pill">${partner.seats} Seats Free</span>
-        </div>`;
-      showPlatformToast(`Verified operational identity for Partner #${partner.id}.`, 'emerald');
-      return;
-    }
+      const partner = engine.getDriverById(query);
+      if (partner) {
+        resultBox.innerHTML = `
+          <div class="flex items-center justify-between w-full text-xs">
+            <div>
+              <span class="text-emerald font-bold"><i class="fa-solid fa-circle-check"></i> Verified Partner:</span>
+              <span class="text-slate-900 font-semibold ml-1">${escapeHTML(partner.name)} (ID: #${partner.id})</span>
+              <span class="text-slate-500 ml-2">&bull; ${escapeHTML(partner.station)} Station</span>
+            </div>
+            <span class="seat-counter-pill">${partner.seats} Seats Free</span>
+          </div>`;
+        showPlatformToast(`Verified operational identity for Partner #${partner.id}.`, 'emerald');
+        return;
+      }
 
-    const booking = engine.getBookingByRef(query);
-    if (booking) {
-      resultBox.innerHTML = `
-        <div class="flex items-center justify-between w-full text-xs">
-          <div>
-            <span class="text-electric font-bold"><i class="fa-solid fa-ticket"></i> Verified Booking:</span>
-            <span class="text-slate-900 font-semibold ml-1">${booking.tripRef} (${booking.passenger.name})</span>
-            <span class="text-slate-500 ml-2">&bull; Driver: ${booking.driverName}</span>
-          </div>
-          <span class="route-match-badge">${booking.matchScore}% Match</span>
-        </div>`;
-      showPlatformToast(`Verified booking reference ${booking.tripRef}.`, 'blue');
-      return;
-    }
+      const booking = engine.getBookingByRef(query);
+      if (booking) {
+        resultBox.innerHTML = `
+          <div class="flex items-center justify-between w-full text-xs">
+            <div>
+              <span class="text-electric font-bold"><i class="fa-solid fa-ticket"></i> Verified Booking:</span>
+              <span class="text-slate-900 font-semibold ml-1">${escapeHTML(booking.tripRef)} (${escapeHTML(booking.passenger.name)})</span>
+              <span class="text-slate-500 ml-2">&bull; Driver: ${escapeHTML(booking.driverName)}</span>
+            </div>
+            <span class="route-match-badge">${booking.matchScore}% Match</span>
+          </div>`;
+        showPlatformToast(`Verified booking reference ${booking.tripRef}.`, 'blue');
+        return;
+      }
 
-    resultBox.innerHTML = `<span class="text-rose-500 text-xs"><i class="fa-solid fa-triangle-exclamation"></i> Reference "${query}" not found in metropolitan fleet or booking registry.</span>`;
-    showPlatformToast(`Reference "${query}" not recognized.`, 'rose');
-  });
+      resultBox.innerHTML = `<span class="text-rose-500 text-xs"><i class="fa-solid fa-triangle-exclamation"></i> Reference "${escapeHTML(query)}" not found in metropolitan fleet or booking registry.</span>`;
+      showPlatformToast(`Reference "${query}" not recognized.`, 'rose');
+    });
+  }
 
   // --- Match & Dispatch Shared Trip (Triggering Enterprise Confirmation Modal) ---
-  document.getElementById('btn-auto-match-trip').addEventListener('click', () => {
-    let passenger = engine.dequeueNextRequest();
-    if (!passenger && engine.standbyCount > 0) {
-      passenger = engine.popFromStandby().item;
-    }
-
-    if (!passenger) {
-      showPlatformToast('No pending commuter requests waiting to be dispatched.', 'rose');
-      return;
-    }
-
-    let matchedPartner = null;
-    for (const partner of engine.fleetPartners) {
-      if (partner.seats > 0) {
-        matchedPartner = partner;
-        break;
+  const btnAutoMatch = document.getElementById('btn-auto-match-trip');
+  if (btnAutoMatch) {
+    btnAutoMatch.addEventListener('click', () => {
+      let passenger = engine.dequeueNextRequest();
+      if (!passenger && engine.standbyCount > 0) {
+        passenger = engine.popFromStandby().item;
       }
-    }
 
-    if (!matchedPartner) {
-      engine.dispatchStream.unshift(passenger);
-      showPlatformToast('All driver partners are currently at maximum passenger capacity.', 'rose');
-      return;
-    }
+      if (!passenger) {
+        showPlatformToast('No pending commuter requests waiting to be dispatched.', 'rose');
+        return;
+      }
 
-    const route = engine.findOptimalEcoRoute(passenger.pickup, passenger.drop);
-    const matchScore = Math.floor(Math.random() * 14 + 85);
+      let matchedPartner = null;
+      for (const partner of engine.fleetPartners) {
+        if (partner.seats > 0) {
+          matchedPartner = partner;
+          break;
+        }
+      }
 
-    const trip = engine.dispatchSharedTrip(
-      passenger,
-      matchedPartner,
-      route.path,
-      route.totalDist,
-      route.estTime,
-      route.fare,
-      route.co2Offset,
-      matchScore
-    );
+      if (!matchedPartner) {
+        engine.dispatchStream.unshift(passenger);
+        showPlatformToast('All driver partners are currently at maximum passenger capacity.', 'rose');
+        return;
+      }
 
-    urbanCanvasInstance.setActivePath(route.path);
-    refreshPlatformUI();
-    openDispatchModal(trip, matchedPartner);
-  });
+      const route = engine.findOptimalEcoRoute(passenger.pickup, passenger.drop);
+      const matchScore = Math.floor(Math.random() * 14 + 85);
+
+      const trip = engine.dispatchSharedTrip(
+        passenger,
+        matchedPartner,
+        route.path,
+        route.totalDist,
+        route.estTime,
+        route.fare,
+        route.co2Offset,
+        matchScore
+      );
+
+      if (urbanCanvasInstance) {
+        urbanCanvasInstance.setActivePath(route.path);
+      }
+      refreshPlatformUI();
+      openDispatchModal(trip, matchedPartner);
+    });
+  }
 
   // --- Revert Confirmation (Triggering Enterprise Reversal Modal) ---
-  document.getElementById('btn-revert-confirmation').addEventListener('click', () => {
-    const res = engine.revertLatestConfirmation();
-    if (!res.success) {
-      showPlatformToast(res.message, 'rose');
-    } else {
+  const btnRevertConf = document.getElementById('btn-revert-confirmation');
+  if (btnRevertConf) {
+    btnRevertConf.addEventListener('click', () => {
+      const res = engine.revertLatestConfirmation();
+      if (!res.success) {
+        showPlatformToast(res.message, 'rose');
+      } else {
+        refreshPlatformUI();
+        openReversalModal(res.action, res.driver);
+      }
+    });
+  }
+
+  // --- Rush-Hour Simulation Scenario ---
+  const btnRushHour = document.getElementById('btn-demo-rushhour');
+  if (btnRushHour) {
+    btnRushHour.addEventListener('click', () => {
+      engine.onboardDriver('Marcus Vance', 'ALPHA', 3);
+      engine.onboardDriver('Elena Rostova', 'METRO', 3);
+      engine.onboardDriver('Kaelen Chen', 'SKYPORT', 2);
+      engine.onboardDriver('Siddharth Rao', 'QUANTUM', 3);
+
+      engine.submitRideRequest('Dr. Aris Thorne', 'ALPHA', 'HORIZON');
+      engine.submitRideRequest('Maya Lin', 'METRO', 'SKYPORT');
+      engine.submitRideRequest('Amara Okafor', 'HARBOR', 'QUANTUM');
+
+      engine.pushToStandby({
+        id: 'BK-STDBY-01',
+        name: 'Taro Watanabe',
+        pickup: 'HARBOR',
+        drop: 'HORIZON',
+        requestedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        status: 'Priority Standby'
+      });
+
+      const p = engine.dequeueNextRequest();
+      const d = engine.fleetPartners[0];
+      const r = engine.findOptimalEcoRoute(p.pickup, p.drop);
+      const trip = engine.dispatchSharedTrip(p, d, r.path, r.totalDist, r.estTime, r.fare, r.co2Offset, 96);
+
+      if (urbanCanvasInstance) {
+        urbanCanvasInstance.setActivePath(r.path);
+      }
       refreshPlatformUI();
-      openReversalModal(res.action, res.driver);
+      showPlatformToast('Simulated Metropolitan Rush-Hour scenario loaded with live fleet, commuters, and active trips!', 'emerald');
+    });
+  }
+
+  // --- Quick Book CTA in Header ---
+  const btnQuickBook = document.getElementById('btn-quick-book');
+  if (btnQuickBook) {
+    btnQuickBook.addEventListener('click', () => {
+      const commuterTabBtn = document.querySelector('[data-tab="tab-passenger-hub"]');
+      if (commuterTabBtn) commuterTabBtn.click();
+      setTimeout(() => {
+        const inp = document.getElementById('passenger-name-input');
+        if (inp) inp.focus();
+      }, 150);
+    });
+  }
+
+  // --- Modal Close Helpers & Backdrop Listeners ---
+  const dispatchModal = document.getElementById('dispatch-confirm-modal');
+  const reversalModal = document.getElementById('reversal-confirm-modal');
+  const receiptModal = document.getElementById('receipt-modal-overlay');
+
+  function closeAllModals() {
+    if (dispatchModal) dispatchModal.classList.add('hidden');
+    if (reversalModal) reversalModal.classList.add('hidden');
+    if (receiptModal) receiptModal.classList.add('hidden');
+  }
+
+  // Backdrop click dismiss
+  [dispatchModal, reversalModal, receiptModal].forEach(modal => {
+    if (modal) {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          modal.classList.add('hidden');
+        }
+      });
     }
   });
 
-  // --- Rush-Hour Simulation Scenario ---
-  document.getElementById('btn-demo-rushhour').addEventListener('click', () => {
-    engine.onboardDriver('Marcus Vance', 'ALPHA', 3);
-    engine.onboardDriver('Elena Rostova', 'METRO', 3);
-    engine.onboardDriver('Kaelen Chen', 'SKYPORT', 2);
-    engine.onboardDriver('Siddharth Rao', 'QUANTUM', 3);
+  // ESC key dismiss for all open modals
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeAllModals();
+    }
+  });
 
-    engine.submitRideRequest('Dr. Aris Thorne', 'ALPHA', 'HORIZON');
-    engine.submitRideRequest('Maya Lin', 'METRO', 'SKYPORT');
-    engine.submitRideRequest('Amara Okafor', 'HARBOR', 'QUANTUM');
+  // Dispatch Modal Buttons
+  const btnCloseDispatch = document.getElementById('btn-close-dispatch-modal');
+  if (btnCloseDispatch) btnCloseDispatch.addEventListener('click', () => dispatchModal.classList.add('hidden'));
 
-    engine.pushToStandby({
-      id: 'BK-STDBY-01',
-      name: 'Taro Watanabe',
-      pickup: 'HARBOR',
-      drop: 'HORIZON',
-      requestedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      status: 'Priority Standby'
+  const btnAckDispatch = document.getElementById('btn-ack-dispatch');
+  if (btnAckDispatch) btnAckDispatch.addEventListener('click', () => dispatchModal.classList.add('hidden'));
+
+  const btnViewMapDispatch = document.getElementById('btn-view-map-dispatch');
+  if (btnViewMapDispatch) {
+    btnViewMapDispatch.addEventListener('click', () => {
+      dispatchModal.classList.add('hidden');
+      const mapTabBtn = document.querySelector('[data-tab="tab-route-finder"]');
+      if (mapTabBtn) mapTabBtn.click();
+      if (urbanCanvasInstance) urbanCanvasInstance.startCarSimulation();
     });
+  }
 
-    const p = engine.dequeueNextRequest();
-    const d = engine.fleetPartners[0];
-    const r = engine.findOptimalEcoRoute(p.pickup, p.drop);
-    const trip = engine.dispatchSharedTrip(p, d, r.path, r.totalDist, r.estTime, r.fare, r.co2Offset, 96);
+  // Reversal Modal Buttons
+  const btnCloseReversal = document.getElementById('btn-close-reversal-modal');
+  if (btnCloseReversal) btnCloseReversal.addEventListener('click', () => reversalModal.classList.add('hidden'));
 
-    urbanCanvasInstance.setActivePath(r.path);
-    refreshPlatformUI();
-    showPlatformToast('Simulated Metropolitan Rush-Hour scenario loaded with live fleet, commuters, and active trips!', 'emerald');
-  });
+  const btnAckReversal = document.getElementById('btn-ack-reversal');
+  if (btnAckReversal) btnAckReversal.addEventListener('click', () => reversalModal.classList.add('hidden'));
 
-  // --- Quick Book CTA in Header ---
-  document.getElementById('btn-quick-book').addEventListener('click', () => {
-    const commuterTabBtn = document.querySelector('[data-tab="tab-passenger-hub"]');
-    if (commuterTabBtn) commuterTabBtn.click();
-    setTimeout(() => {
-      document.getElementById('passenger-name-input').focus();
-    }, 150);
-  });
+  // Eco-Receipt Modal Buttons
+  const btnCloseReceipt = document.getElementById('btn-close-receipt');
+  if (btnCloseReceipt) btnCloseReceipt.addEventListener('click', () => receiptModal.classList.add('hidden'));
 
-  // --- Dispatch Modal Actions ---
-  const dispatchModal = document.getElementById('dispatch-confirm-modal');
-  document.getElementById('btn-close-dispatch-modal').addEventListener('click', () => {
-    dispatchModal.classList.add('hidden');
-  });
-  document.getElementById('btn-ack-dispatch').addEventListener('click', () => {
-    dispatchModal.classList.add('hidden');
-  });
-  document.getElementById('btn-view-map-dispatch').addEventListener('click', () => {
-    dispatchModal.classList.add('hidden');
-    const mapTabBtn = document.querySelector('[data-tab="tab-route-finder"]');
-    if (mapTabBtn) mapTabBtn.click();
-    urbanCanvasInstance.startCarSimulation();
-  });
+  const btnDoneReceipt = document.getElementById('btn-done-receipt');
+  if (btnDoneReceipt) btnDoneReceipt.addEventListener('click', () => receiptModal.classList.add('hidden'));
 
-  // --- Reversal Modal Actions ---
-  const reversalModal = document.getElementById('reversal-confirm-modal');
-  document.getElementById('btn-close-reversal-modal').addEventListener('click', () => {
-    reversalModal.classList.add('hidden');
-  });
-  document.getElementById('btn-ack-reversal').addEventListener('click', () => {
-    reversalModal.classList.add('hidden');
-  });
-
-  // --- Eco-Receipt Modal Controls ---
-  const receiptModal = document.getElementById('receipt-modal-overlay');
-  document.getElementById('btn-close-receipt').addEventListener('click', () => {
-    receiptModal.classList.add('hidden');
-  });
-  document.getElementById('btn-done-receipt').addEventListener('click', () => {
-    receiptModal.classList.add('hidden');
-  });
-  document.getElementById('btn-print-receipt').addEventListener('click', () => {
-    window.print();
-  });
+  const btnPrintReceipt = document.getElementById('btn-print-receipt');
+  if (btnPrintReceipt) {
+    btnPrintReceipt.addEventListener('click', () => {
+      window.print();
+    });
+  }
 
   // Initial Startup
   refreshPlatformUI();

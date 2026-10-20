@@ -1,0 +1,6 @@
+{
+  "summary": "Plan to build the C++ Backend Server for NexusMobility Eco-Logistics Platform with complete REST API endpoints, Dijkstra pathfinding, models, circular buffer, FIFO queues, driver fleet, and CMake build configuration.",
+  "updatedAt": "2026-10-20T06:07:17.504528Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
