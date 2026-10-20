@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NexusMobility — Smart City Eco-Logistics & Carpooling Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+</head>
+<body class="bg-eco-light text-slate-800">
+  <!-- Ambient Eco Particle Canvas Layer (Leaves & Energy Nodes) -->
+  <canvas id="ambient-canvas" class="fixed inset-0 pointer-events-none z-0"></canvas>
+
+  <div class="app-layout relative z-10">
+    <!-- Top Header Navigation (Cleaned) -->
+    <header class="top-nav white-card">
+      <div class="nav-left">
+        <div class="brand-logo">
+          <div class="brand-icon">
+            <i class="fa-solid fa-leaf text-emerald"></i>
+          </div>
+          <div>
+            <div class="brand-name">Nexus<span class="text-emerald">Mobility</span></div>
+            <div class="brand-tagline">SMART TRANSIT & ECO-LOGISTICS SUITE</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Essential Primary Action Controls -->
+      <div class="nav-actions">
+        <button id="btn-demo-rushhour" class="btn btn-emerald-outline" title="Simulate realistic metropolitan rush hour traffic">
+          <i class="fa-solid fa-bolt-lightning text-emerald"></i> Rush-Hour Simulation
+        </button>
+        <button id="btn-quick-book" class="btn btn-primary">
+          <i class="fa-solid fa-calendar-check"></i> Book Eco-Ride
+        </button>
+      </div>
+    </header>
+
+    <!-- Global Executive KPI Ribbon -->
+    <section class="kpi-banner">
+      <div class="kpi-card eco-card-hover">
+        <div class="kpi-icon-wrap bg-emerald-light">
+          <i class="fa-solid fa-cloud-arrow-down text-emerald"></i>
+        </div>
+        <div class="kpi-content">
+          <div class="kpi-label">CO₂ EMISSIONS SAVED</div>
+          <div class="kpi-value text-emerald" id="kpi-co2">148.5 <span class="kpi-unit">kg</span></div>
+          <div class="kpi-sub">+12.4% vs solo transit</div>
+        </div>
+      </div>
+
+      <div class="kpi-card eco-card-hover">
+        <div class="kpi-icon-wrap bg-blue-light">
+          <i class="fa-solid fa-network-wired text-electric"></i>
+        </div>
+        <div class="kpi-content">
+          <div class="kpi-label">VEHICLE DENSITY RELIEF</div>
+          <div class="kpi-value text-electric" id="kpi-density">34.8<span class="kpi-unit">%</span></div>
+          <div class="kpi-sub">Urban corridor reduction</div>
+        </div>
+      </div>
+
+      <div class="kpi-card eco-card-hover">
+        <div class="kpi-icon-wrap bg-purple-light">
+          <i class="fa-solid fa-gas-pump text-purple-600"></i>
+        </div>
+        <div class="kpi-content">
+          <div class="kpi-label">FUEL SAVINGS INDEX</div>
+          <div class="kpi-value text-purple-600" id="kpi-fuel">412 <span class="kpi-unit">liters</span></div>
+          <div class="kpi-sub">Shared vehicle economy</div>
+        </div>
+      </div>
+
+      <div class="kpi-card eco-card-hover">
+        <div class="kpi-icon-wrap bg-amber-light">
+          <i class="fa-solid fa-users-viewfinder text-amber-600"></i>
+        </div>
+        <div class="kpi-content">
+          <div class="kpi-label">DISPATCH DEMAND</div>
+          <div class="kpi-value text-amber-600" id="kpi-commuters">0 <span class="kpi-unit">commuters</span></div>
+          <div class="kpi-sub">Real-time demand stream</div>
+        </div>
+      </div>
+
+      <div class="kpi-card eco-card-hover">
+        <div class="kpi-icon-wrap bg-teal-light">
+          <i class="fa-solid fa-shield-halved text-teal-600"></i>
+        </div>
+        <div class="kpi-content">
+          <div class="kpi-label">ACTIVE SHARED TRIPS</div>
+          <div class="kpi-value text-teal-600" id="kpi-active-trips">0 <span class="kpi-unit">trips</span></div>
+          <div class="kpi-sub">In-transit metropolitan fleet</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 Primary Navigation Tabs -->
+    <nav class="enterprise-tabs-nav white-card">
+      <button class="tab-trigger active" data-tab="tab-route-finder">
+        <i class="fa-solid fa-map-location-dot"></i>
+        <span>1. Eco-Route Finder & Map</span>
+      </button>
+      <button class="tab-trigger" data-tab="tab-passenger-hub">
+        <i class="fa-solid fa-users"></i>
+        <span>2. Commuter Passenger Hub</span>
+        <span class="tab-badge" id="tab-passengers-badge">0</span>
+      </button>
+      <button class="tab-trigger" data-tab="tab-fleet-dispatch">
+        <i class="fa-solid fa-car-side"></i>
+        <span>3. Driver Fleet & Dispatch Console</span>
+        <span class="tab-badge blue-badge" id="tab-fleet-badge">0</span>
+      </button>
+      <button class="tab-trigger" data-tab="tab-sustainability">
+        <i class="fa-solid fa-chart-line"></i>
+        <span>4. City Sustainability Analytics</span>
+      </button>
+    </nav>
+
+    <!-- Main Tabbed Content Area -->
+    <main class="tabbed-content-area">
+
+      <!-- ==========================================
+           TAB 1: ECO-ROUTE FINDER & MAP
+           ========================================== -->
+      <section id="tab-route-finder" class="tab-view active">
+        <div class="content-panel white-card eco-card-hover">
+          <div class="panel-header">
+            <div class="header-title">
+              <i class="fa-solid fa-map-location-dot text-electric"></i>
+              <div>
+                <h2>Metropolitan Eco-Route Finder & 3D Spatial Corridor Map</h2>
+                <p>Interactive transit network featuring directional flow indicators, animated transit vehicle simulation, and live commuter fare splitting</p>
+              </div>
+            </div>
+            <div class="status-badge live-badge">
+              <span class="live-pulse"></span>
+              Live Grid Active
+            </div>
+          </div>
+
+          <!-- Route Query Bar -->
+          <div class="route-query-bar">
+            <div class="form-control-inline">
+              <label><i class="fa-solid fa-circle-dot text-emerald"></i> Origin Station</label>
+              <select id="route-origin" class="select-field"></select>
+            </div>
+            <div class="route-swap-btn" id="btn-swap-route" title="Swap Origin & Destination">
+              <i class="fa-solid fa-arrow-right-arrow-left"></i>
+            </div>
+            <div class="form-control-inline">
+              <label><i class="fa-solid fa-location-dot text-rose-500"></i> Destination Station</label>
+              <select id="route-destination" class="select-field"></select>
+            </div>
+            <button id="btn-calc-route" class="btn btn-primary">
+              <i class="fa-solid fa-route"></i> Calculate Optimal Route
+            </button>
+            <button id="btn-simulate-drive" class="btn btn-emerald-outline" title="Re-simulate vehicle driving along the route">
+              <i class="fa-solid fa-play"></i> Drive Route
+            </button>
+            <button id="btn-reset-view" class="btn btn-ghost" title="Reset 3D Map View">
+              <i class="fa-solid fa-crosshairs"></i> Reset View
+            </button>
+          </div>
+
+          <!-- Dynamic Commuter Density Slider -->
+          <div class="commuter-slider-bar">
+            <div class="slider-info">
+              <span class="slider-title"><i class="fa-solid fa-user-group text-emerald"></i> Pooled Commuter Density</span>
+              <span class="slider-desc">Adjust number of pooled passengers to observe real-time fare splitting and emissions reduction</span>
+            </div>
+            <div class="slider-controls">
+              <input type="range" id="commuter-range-slider" min="1" max="4" value="2" class="range-slider" />
+              <div class="slider-ticks">
+                <span class="tick">1 Solo</span>
+                <span class="tick active-tick" id="tick-2">2 Pooled</span>
+                <span class="tick" id="tick-3">3 Pooled</span>
+                <span class="tick" id="tick-4">4 Max Pool</span>
+              </div>
+            </div>
+            <div class="slider-result-pill">
+              <span class="text-xs text-slate-500 font-medium">FARE PER SEAT:</span>
+              <span class="text-base font-bold text-emerald" id="slider-fare-display">$7.45</span>
+            </div>
+          </div>
+
+          <!-- 3D Spatial Canvas Container with Animated Vehicle Simulation -->
+          <div class="map-canvas-container" id="map-canvas-container">
+            <canvas id="urban-3d-canvas"></canvas>
+            <div class="map-hud-overlay" id="map-hud-overlay">
+              <i class="fa-solid fa-hand-pointer text-emerald"></i> Click & drag to orbit 3D city corridors &bull; Scroll to zoom
+            </div>
+            <div class="compass-rose">
+              <div class="compass-inner">
+                <span class="compass-n">N</span>
+                <span class="compass-e">E</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Trip Impact Metrics Summary Strip -->
+          <div class="trip-impact-strip" id="trip-impact-strip">
+            <div class="impact-metric">
+              <span class="label">TRANSIT PATH</span>
+              <span class="value text-slate-800 font-mono" id="strip-path">Select stations above</span>
+            </div>
+            <div class="impact-metric">
+              <span class="label">EST. COMMUTE DISTANCE</span>
+              <span class="value text-electric font-mono" id="strip-distance">-- km</span>
+            </div>
+            <div class="impact-metric">
+              <span class="label">EST. COMMUTE TIME</span>
+              <span class="value text-slate-700 font-mono" id="strip-time">-- min</span>
+            </div>
+            <div class="impact-metric">
+              <span class="label">CO₂ OFFSET SAVED</span>
+              <span class="value text-emerald font-mono font-bold" id="strip-co2">-- kg</span>
+            </div>
+            <div class="impact-metric">
+              <span class="label">SOLO VEHICLES REMOVED</span>
+              <span class="value text-amber-700 font-mono font-bold" id="strip-vehicles-saved">1 Car</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==========================================
+           TAB 2: COMMUTER PASSENGER HUB
+           ========================================== -->
+      <section id="tab-passenger-hub" class="tab-view">
+        <div class="content-panel white-card eco-card-hover">
+          <div class="panel-header">
+            <div class="header-title">
+              <i class="fa-solid fa-users text-emerald"></i>
+              <div>
+                <h2>Passenger Dispatch Hub & Priority Standby Lounge</h2>
+                <p>Submit immediate ride requests, monitor the live dispatch pipeline, and manage high-demand priority standby</p>
+              </div>
+            </div>
+            <div class="status-badge">
+              <span class="seat-badge">Auto-Matching Active</span>
+            </div>
+          </div>
+
+          <!-- Passenger Request Form -->
+          <div class="action-bar-row">
+            <div class="input-with-icon flex-1">
+              <i class="fa-solid fa-user"></i>
+              <input type="text" id="passenger-name-input" placeholder="Commuter Name (e.g., Dr. Aris Thorne)" class="text-input" />
+            </div>
+            <div class="form-control-inline">
+              <select id="passenger-pickup-select" class="select-field"></select>
+            </div>
+            <div class="form-control-inline">
+              <select id="passenger-drop-select" class="select-field"></select>
+            </div>
+            <button id="btn-request-ride" class="btn btn-emerald">
+              <i class="fa-solid fa-plus"></i> Request Ride
+            </button>
+            <button id="btn-cancel-front-req" class="btn btn-outline" title="Dispatch or cancel front pending request">
+              <i class="fa-solid fa-user-xmark"></i> Dequeue Next
+            </button>
+          </div>
+
+          <!-- Dual Dispatch Pipelines Layout -->
+          <div class="dispatch-layout">
+            <!-- Real-Time Request Conveyor -->
+            <div class="dispatch-column">
+              <div class="column-subtitle">
+                <span><i class="fa-solid fa-stream text-electric"></i> Live Passenger Dispatch Pipeline</span>
+                <span class="sub-pill">FIRST TO BE MATCHED &rarr; REAR</span>
+              </div>
+              <div class="conveyor-pipeline" id="passenger-conveyor">
+                <!-- EcoSprout Empty State loaded dynamically -->
+              </div>
+            </div>
+
+            <!-- Priority Standby Lounge (Max 5 Slots) -->
+            <div class="dispatch-column standby-column">
+              <div class="column-subtitle">
+                <span><i class="fa-solid fa-champagne-glasses text-amber-600"></i> Priority Standby Lounge (5 Slots)</span>
+                <span class="sub-pill text-amber-700 font-bold" id="standby-status-pill">Available Slots: 5 / 5</span>
+              </div>
+              <div class="standby-hub-container">
+                <div class="standby-ring" id="standby-ring">
+                  <!-- 5 Visual Standby Slots dynamically generated -->
+                </div>
+                <div class="standby-center-badge">
+                  <span class="text-[10px] text-slate-500 font-semibold tracking-wider">STANDBY</span>
+                  <span class="text-xl font-bold text-amber-600" id="standby-slot-counter">0 / 5</span>
+                  <span class="text-[9px] text-slate-500 font-medium">AUTO-DISPATCH</span>
+                </div>
+              </div>
+              <div class="standby-actions">
+                <button id="btn-push-standby" class="btn btn-sm btn-amber" title="Hold passenger in priority standby lounge">
+                  <i class="fa-solid fa-chair"></i> Add to Standby
+                </button>
+                <button id="btn-pop-standby" class="btn btn-sm btn-outline" title="Seat front passenger from standby lounge">
+                  <i class="fa-solid fa-arrow-up-from-bracket"></i> Seat Commuter
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==========================================
+           TAB 3: DRIVER FLEET & DISPATCH CONSOLE
+           ========================================== -->
+      <section id="tab-fleet-dispatch" class="tab-view">
+        <div class="fleet-dispatch-split-grid">
+
+          <!-- Left: Driver Onboarding & Interactive Car Blueprint -->
+          <div class="content-panel white-card eco-card-hover">
+            <div class="panel-header">
+              <div class="header-title">
+                <i class="fa-solid fa-id-card-clip text-emerald"></i>
+                <div>
+                  <h2>Driver Partner Fleet & Vehicle Seat Blueprint</h2>
+                  <p>Onboard driver partners and visually configure available passenger seats</p>
+                </div>
+              </div>
+              <div class="status-badge fleet-badge" id="fleet-count-badge">
+                0 Active Partners
+              </div>
+            </div>
+
+            <!-- Driver Registration Bar with Visual Car Diagram -->
+            <div class="driver-onboarding-panel">
+              <div class="onboarding-form-inputs">
+                <div class="input-with-icon">
+                  <i class="fa-solid fa-user-tie"></i>
+                  <input type="text" id="driver-name-input" placeholder="Partner Name (e.g., Marcus Vance)" class="text-input" />
+                </div>
+                <div class="form-control-inline">
+                  <select id="driver-station-select" class="select-field"></select>
+                </div>
+                <button id="btn-register-driver" class="btn btn-emerald w-full">
+                  <i class="fa-solid fa-car-on"></i> Onboard Partner (<span id="driver-seats-count-label">3</span> Seats)
+                </button>
+              </div>
+
+              <!-- Interactive 4-Seat Visual Car Blueprint -->
+              <div class="car-diagram-box">
+                <div class="car-diagram-title">
+                  <i class="fa-solid fa-car"></i> Visual Seat Selector (Click to Toggle)
+                </div>
+                <div class="car-chassis">
+                  <div class="car-front-windshield"></div>
+                  <div class="car-cabin">
+                    <div class="car-row">
+                      <div class="car-seat occupied-driver" title="Driver Seat (Always Occupied)">
+                        <i class="fa-solid fa-user-ninja"></i>
+                        <span>DRIVER</span>
+                      </div>
+                      <div class="car-seat active-seat" id="seat-front-pass" data-seat="front" title="Click to toggle Front Passenger Seat">
+                        <i class="fa-solid fa-user-check"></i>
+                        <span>FRONT</span>
+                      </div>
+                    </div>
+                    <div class="car-row">
+                      <div class="car-seat active-seat" id="seat-rear-left" data-seat="rear-left" title="Click to toggle Rear Left Seat">
+                        <i class="fa-solid fa-user-check"></i>
+                        <span>REAR L</span>
+                      </div>
+                      <div class="car-seat active-seat" id="seat-rear-right" data-seat="rear-right" title="Click to toggle Rear Right Seat">
+                        <i class="fa-solid fa-user-check"></i>
+                        <span>REAR R</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Fleet Directory Stream -->
+            <div class="fleet-directory-wrapper">
+              <div class="column-subtitle">
+                <span><i class="fa-solid fa-list-check text-emerald"></i> Active Driver Partner Directory</span>
+                <span class="sub-pill" id="fleet-capacity-pill">Total Available Seats: 0</span>
+              </div>
+              <div class="fleet-stream" id="fleet-stream-container">
+                <!-- EcoSprout Empty State loaded dynamically -->
+              </div>
+            </div>
+
+            <!-- Flexible Identity Search Bar -->
+            <div class="verification-wrapper">
+              <div class="column-subtitle">
+                <span><i class="fa-solid fa-magnifying-glass text-electric"></i> Fast Identity & Trip Verification Lookup</span>
+                <span class="sub-pill">SUPPORTS DRIVER ID (#101) OR BOOKING REF (NX-501)</span>
+              </div>
+              <div class="search-bar-row">
+                <div class="input-with-icon flex-1">
+                  <i class="fa-solid fa-fingerprint"></i>
+                  <input type="text" id="verify-id-input" placeholder="Enter ID (e.g., 101, NX-501, BK-201)" class="text-input" />
+                </div>
+                <button id="btn-verify-id" class="btn btn-outline">
+                  <i class="fa-solid fa-check-double text-emerald"></i> Verify Record
+                </button>
+              </div>
+              <div class="verification-result-box" id="verification-result-box">
+                <span class="text-slate-500 text-xs">Enter a Driver ID or Booking Reference above to verify operational credentials.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Active Shared Trips Console & Reversal Controls -->
+          <div class="content-panel white-card eco-card-hover">
+            <div class="panel-header">
+              <div class="header-title">
+                <i class="fa-solid fa-car-side text-purple-600"></i>
+                <div>
+                  <h2>Active Shared Trips & Route Compatibility Console</h2>
+                  <p>Monitor dispatched carpools with route compatibility match scores, or safely revert recent confirmations</p>
+                </div>
+              </div>
+              <div class="status-badge purple-badge" id="active-trips-badge">
+                0 In-Transit
+              </div>
+            </div>
+
+            <!-- Dispatch Operations Action Bar -->
+            <div class="action-bar-row justify-between">
+              <button id="btn-auto-match-trip" class="btn btn-primary">
+                <i class="fa-solid fa-handshake"></i> Dispatch Next Compatible Trip
+              </button>
+              <button id="btn-revert-confirmation" class="btn btn-rose" title="Safely revert the most recent trip confirmation and restore seat count">
+                <i class="fa-solid fa-rotate-left"></i> Revert Last Confirmation
+              </button>
+            </div>
+
+            <!-- Active Trips List -->
+            <div class="active-trips-stream" id="active-trips-stream">
+              <!-- EcoSprout Empty State loaded dynamically -->
+            </div>
+
+            <!-- Transit Registry Canvas & Reversal Audit Trail -->
+            <div class="trip-insights-grid">
+              <div class="insights-box">
+                <div class="column-subtitle">
+                  <span><i class="fa-solid fa-bezier-curve text-electric"></i> Trip Hierarchy & Corridor Network</span>
+                  <span class="sub-pill font-mono" id="registry-count-pill">0 Dispatched</span>
+                </div>
+                <div class="canvas-visual-box">
+                  <canvas id="trip-hierarchy-canvas" width="460" height="180"></canvas>
+                </div>
+              </div>
+
+              <div class="insights-box">
+                <div class="column-subtitle">
+                  <span><i class="fa-solid fa-clock-rotate-left text-slate-600"></i> Recent Dispatch Reversal Log</span>
+                  <span class="sub-pill font-mono" id="audit-log-pill">0 Rollbacks Available</span>
+                </div>
+                <div class="audit-history-list" id="audit-history-list">
+                  <div class="empty-state">
+                    <p>Reversal log clear. Confirm a trip to create a restorable dispatch state.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ==========================================
+           TAB 4: CITY SUSTAINABILITY ANALYTICS
+           ========================================== -->
+      <section id="tab-sustainability" class="tab-view">
+        <div class="sustainability-section white-card eco-card-hover">
+          <div class="panel-header">
+            <div class="header-title">
+              <i class="fa-solid fa-earth-americas text-emerald"></i>
+              <div>
+                <h2>Metropolitan Sustainability & Carbon Offset Analytics</h2>
+                <p>Empirical climate impact metrics, fuel consumption reduction, and gamified top eco-mobility partners</p>
+              </div>
+            </div>
+            <div class="status-badge live-badge">
+              <i class="fa-solid fa-seedling text-emerald"></i> Clean Air Metric ISO-14064
+            </div>
+          </div>
+
+          <div class="sustainability-grid">
+            <div class="eco-metric-card">
+              <div class="eco-num text-emerald" id="eco-total-co2">148.5 kg</div>
+              <div class="eco-desc">Net Atmospheric Carbon Reduction</div>
+              <div class="progress-bar-wrap">
+                <div class="progress-bar-fill bg-emerald" style="width: 74%;"></div>
+              </div>
+              <span class="text-[11px] text-slate-500">74% toward daily metropolitan reduction target</span>
+            </div>
+
+            <div class="eco-metric-card">
+              <div class="eco-num text-electric" id="eco-shared-km">1,420 km</div>
+              <div class="eco-desc">Collective Pooled Distance Traveled</div>
+              <div class="progress-bar-wrap">
+                <div class="progress-bar-fill bg-electric" style="width: 62%;"></div>
+              </div>
+              <span class="text-[11px] text-slate-500">Eliminating ~58 individual single-driver vehicles</span>
+            </div>
+
+            <div class="eco-metric-card">
+              <div class="eco-num text-purple-600" id="eco-efficiency">94.2%</div>
+              <div class="eco-desc">Corridor Fleet Seat Utilization Rate</div>
+              <div class="progress-bar-wrap">
+                <div class="progress-bar-fill bg-purple" style="width: 94%;"></div>
+              </div>
+              <span class="text-[11px] text-slate-500">Optimal multi-commuter ride clustering</span>
+            </div>
+
+            <!-- Leaderboard with Gamified Achievement Badges -->
+            <div class="eco-leaderboard-box">
+              <div class="leaderboard-title">
+                <i class="fa-solid fa-trophy text-amber-500"></i> Top Eco-Driver Partners
+              </div>
+              <div class="leaderboard-list" id="eco-leaderboard-list">
+                <!-- Dynamic Leaderboard Items -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Platform Footer -->
+    <footer class="app-footer">
+      <div class="footer-left">
+        <span class="font-bold text-slate-900">NexusMobility Technologies Inc.</span> &bull; Intelligent Urban Transit & Eco-Logistics Infrastructure
+      </div>
+      <div class="footer-right">
+        <span><i class="fa-solid fa-shield-halved text-emerald"></i> Enterprise SLA: 99.99%</span>
+        <span><i class="fa-solid fa-signal text-electric"></i> Real-Time Telemetry Active</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Enterprise Modal 1: Dispatch Confirmation Dialog -->
+  <div class="modal-overlay hidden" id="dispatch-confirm-modal">
+    <div class="modal-card white-card">
+      <div class="modal-header">
+        <div class="flex items-center gap-2">
+          <div class="brand-icon small-icon bg-emerald-light"><i class="fa-solid fa-car-rear text-emerald"></i></div>
+          <div>
+            <h3 class="font-bold text-slate-900">Trip Dispatched Successfully!</h3>
+            <p class="text-xs text-slate-500 font-mono">Metropolitan Shared Transit Alignment Confirmed</p>
+          </div>
+        </div>
+        <button id="btn-close-dispatch-modal" class="btn btn-ghost"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+
+      <div class="modal-dialog-body" id="dispatch-modal-body">
+        <!-- Injected dynamically -->
+      </div>
+
+      <div class="modal-footer">
+        <button id="btn-view-map-dispatch" class="btn btn-outline"><i class="fa-solid fa-map-location-dot"></i> View on Route Map</button>
+        <button id="btn-ack-dispatch" class="btn btn-emerald">Acknowledge Dispatch</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Enterprise Modal 2: Trip Reversal & Rollback Dialog -->
+  <div class="modal-overlay hidden" id="reversal-confirm-modal">
+    <div class="modal-card white-card">
+      <div class="modal-header">
+        <div class="flex items-center gap-2">
+          <div class="brand-icon small-icon bg-rose-light"><i class="fa-solid fa-rotate-left text-rose"></i></div>
+          <div>
+            <h3 class="font-bold text-slate-900">Dispatch Confirmation Reverted</h3>
+            <p class="text-xs text-slate-500 font-mono">Safe Rollback & Fleet Capacity Restored</p>
+          </div>
+        </div>
+        <button id="btn-close-reversal-modal" class="btn btn-ghost"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+
+      <div class="modal-dialog-body" id="reversal-modal-body">
+        <!-- Injected dynamically -->
+      </div>
+
+      <div class="modal-footer">
+        <button id="btn-ack-reversal" class="btn btn-primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 3: Official Eco-Transit Journey Receipt -->
+  <div class="modal-overlay hidden" id="receipt-modal-overlay">
+    <div class="modal-card white-card" id="receipt-modal-card">
+      <div class="modal-header">
+        <div class="flex items-center gap-2">
+          <div class="brand-icon small-icon"><i class="fa-solid fa-leaf text-emerald"></i></div>
+          <div>
+            <h3 class="font-bold text-slate-900">Official Eco-Transit Journey Receipt</h3>
+            <p class="text-xs text-slate-500 font-mono">Metropolitan Shared Mobility Environmental Audit</p>
+          </div>
+        </div>
+        <button id="btn-close-receipt" class="btn btn-ghost"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+
+      <div class="receipt-content" id="receipt-content-area">
+        <!-- Receipt details populated dynamically -->
+      </div>
+
+      <div class="modal-footer">
+        <button id="btn-print-receipt" class="btn btn-outline"><i class="fa-solid fa-print"></i> Print Receipt</button>
+        <button id="btn-done-receipt" class="btn btn-primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Toasts Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

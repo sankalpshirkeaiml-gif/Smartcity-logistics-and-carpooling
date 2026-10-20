@@ -1,0 +1,2 @@
+
+Encountered error in step execution: exec: "C:\\Users\\Kartik Bhosle\\.gemini\\antigravity\\brain\\6976d1a8-fd03-4453-a790-acd552e1861a\\powershell": executable file not found in %PATH%

@@ -1,0 +1,44 @@
+The following changes were made by the replace_file_content tool to: C:\Users\Kartik Bhosle\.gemini\antigravity\brain\6976d1a8-fd03-4453-a790-acd552e1861a\app.js. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -1473,6 +1473,38 @@
+     });
+   });
+ 
++  // --- One-Click Download ZIP Handler ---
++  const downloadZipBtn = document.getElementById('btn-download-zip');
++  if (downloadZipBtn) {
++    downloadZipBtn.addEventListener('click', async () => {
++      try {
++        showToast('Packaging Smart City project into .ZIP...', 'cyan');
++        const zip = new JSZip();
++
++        // Fetch local files or package contents directly
++        const fileNames = ['index.html', 'styles.css', 'app.js', 'README.md'];
++        for (const name of fileNames) {
++          try {
++            const res = await fetch(name);
++            if (res.ok) {
++              const text = await res.text();
++              zip.file(name, text);
++            }
++          } catch (e) {
++            console.warn(`Could not fetch ${name} via fetch, skipping direct text fetch`, e);
++          }
++        }
++
++        const content = await zip.generateAsync({ type: 'blob' });
++        saveAs(content, 'smart-city-carpool.zip');
++        showToast('smart-city-carpool.zip downloaded successfully!', 'emerald');
++      } catch (err) {
++        console.error('ZIP generation error:', err);
++        showToast('Failed to create ZIP automatically. See README.md.', 'rose');
++      }
++    });
++  }
++
+   // Initial UI Render & Tilt Bind
+   updateAllUI();
+   bindTiltElements();
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
