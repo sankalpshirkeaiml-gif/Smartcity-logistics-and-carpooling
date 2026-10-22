@@ -1,0 +1,3 @@
+Command failed to run: exec: "C:\\Users\\Kartik Bhosle\\AppData\\Local\\Programs\\antigravity\\powershell": executable file not found in %PATH%.
+
+No output from the command.
